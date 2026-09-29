@@ -1,10 +1,26 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { startWebhookServer } from '../src/bot.js';
+import os from 'node:os';
+import fs from 'node:fs';
+import path from 'node:path';
+
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qmywi-webhook-'));
+process.env.DB_PATH = path.join(tmpDir, 'test.sqlite');
+
+const { startWebhookServer } = await import('../src/bot.js');
+
+after(() => {
+  try {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  } catch {
+    // abaikan
+  }
+});
 
 test('Webhook Server - Health Check GET /health', async () => {
   const port = 3456;
-  const server = startWebhookServer(port);
+  // setWebhook: false -> test TIDAK boleh mengubah webhook Telegram production.
+  const server = startWebhookServer(port, { setWebhook: false });
 
   try {
     await new Promise(resolve => setTimeout(resolve, 100));

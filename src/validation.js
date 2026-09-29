@@ -130,3 +130,37 @@ export function validateLength(input) {
   }
   return { valid: true, value: Math.round(num) };
 }
+
+/**
+ * Validasi nama lengkap saat registrasi access control.
+ * @param {string} input
+ */
+export function validateName(input) {
+  if (!input || typeof input !== 'string') {
+    return { valid: false, error: 'Nama tidak boleh kosong. Silakan masukkan NAMA lengkap Anda.' };
+  }
+  const clean = input.trim().replace(/\s+/g, ' ');
+  if (clean.length < 2) {
+    return { valid: false, error: 'Nama terlalu pendek. Silakan masukkan NAMA lengkap Anda.' };
+  }
+  if (clean.length > 100) {
+    return { valid: false, error: 'Nama terlalu panjang (maksimal 100 karakter).' };
+  }
+  return { valid: true, value: clean };
+}
+
+/**
+ * Validasi NIK (Nomor Induk Karyawan): tidak kosong dan tepat 8 digit angka.
+ * @param {string} input
+ */
+export function validateNik(input) {
+  if (!input || typeof input !== 'string') {
+    return { valid: false, error: 'NIK tidak boleh kosong.' };
+  }
+  const clean = input.trim();
+  if (!/^\d{8}$/.test(clean)) {
+    return { valid: false, error: 'NIK harus terdiri dari 8 digit angka.' };
+  }
+  return { valid: true, value: clean };
+}
+

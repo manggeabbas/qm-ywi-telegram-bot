@@ -7,6 +7,8 @@
 **Final Output:** Format Mandarin workplace  
 **Motto:** *"Periksa dengan teliti, Pastikan Sempurna!"*
 
+> 📘 **Panduan lengkap pemakaian & deployment ada di [TUTORIAL.md](./TUTORIAL.md).**
+
 ---
 
 ## 1. Deskripsi
@@ -46,6 +48,12 @@ Versi 2.1 berfokus pada **Form Generator** tanpa database coil, dilengkapi detek
 - **Idempotensi & Keamanan**:
   - Pencegahan pemrosesan `update_id` ganda akibat webhook retry.
   - Token bot dan secret terisolasi di environment variable / `.env` dan tidak pernah bocor ke log.
+- **Access Control & Registrasi (baru)**:
+  - User baru wajib memiliki token undangan (sekali pakai, disimpan sebagai hash).
+  - Registrasi NAMA + NIK karyawan (8 digit angka, unik) dengan konfirmasi sebelum aktif.
+  - Status user `NEW`, `REGISTRATION`, `ACTIVE`, `BLOCKED` dengan access guard terpusat.
+  - Panel admin/owner (`/admin`): buat token, daftar token, daftar/detail user, blokir & aktifkan.
+  - Persistence SQLite agar data tetap ada setelah restart/redeploy.
 
 ---
 
@@ -55,14 +63,22 @@ Versi 2.1 berfokus pada **Form Generator** tanpa database coil, dilengkapi detek
 src/
 ├── config.js         # Konfigurasi environment & konstanta
 ├── logger.js         # Logger aman (menyensor token/secret)
+├── db.js             # Koneksi & schema SQLite (node:sqlite) + transaksi
+├── users.js          # Repository user, status, masking NIK
+├── invites.js        # Invite token: generate, hash, redeem atomic
+├── registration.js   # Alur registrasi (NAMA -> NIK -> konfirmasi)
+├── access.js         # Access guard (NEW/REGISTRATION/ACTIVE/BLOCKED)
+├── admin.js          # Panel owner: token, daftar user, blokir/aktifkan
+├── menu.js           # Menu utama reusable
+├── texts.js          # Kumpulan teks pesan access control/registrasi
 ├── material.js       # Mapping Z/K/G dan logika deteksi material
 ├── numbering.js      # Parsing coil, grouping suffix HAxx, generator nomor
 ├── diameter.js       # Aturan diameter FT & FJ
-├── validation.js     # Validasi input (mesin, coil, spec, count, defect, length)
+├── validation.js     # Validasi input (mesin, coil, spec, count, defect, length, nama, NIK)
 ├── form.js           # Generator output Mandarin workplace & preview
-├── state.js          # Sesi pengguna & cache idempotensi update_id
-├── wizard.js         # Alur step-by-step & penanganan pesan interaktif
-└── bot.js            # Router Telegram bot, webhook HTTP server, dan polling runner
+├── state.js          # Sesi Form Generator & cache idempotensi update_id
+├── wizard.js         # Alur step-by-step Form Generator
+└── bot.js            # Router Telegram bot, access guard, webhook/polling runner
 ```
 
 ---
@@ -70,8 +86,9 @@ src/
 ## 4. Instalasi & Menjalankan
 
 ### Prasyarat
-- Node.js (v18 ke atas disarankan, diuji pada Node.js v26)
+- Node.js **v22.5 ke atas** (wajib, karena persistence memakai `node:sqlite` bawaan Node; diuji pada Node.js v26)
 - Token Telegram Bot dari [@BotFather](https://t.me/BotFather)
+- Telegram User ID owner (untuk fitur `/admin`)
 
 ### Langkah Setup
 
@@ -113,23 +130,99 @@ Jika ingin menjalankan bot secara serverless tanpa VPS/server:
 2. Salin isi file [google-apps-script/Bundle.gs](./google-apps-script/Bundle.gs) ke [script.google.com](https://script.google.com).
 3. Masukkan `TELEGRAM_BOT_TOKEN` di *Script Properties*, deploy sebagai *Web app*, dan jalankan fungsi `setupWebhook()`.
 
+> Catatan: implementasi access control saat ini hanya tersedia pada versi Node.js (`src/`).
+
+---
+
+## 4b. Access Control, Invite Token & Registrasi
+
+Bot tidak lagi dapat langsung digunakan oleh siapa pun. Setiap Telegram User ID
+harus melewati access guard sebelum dapat mengakses Form Generator.
+
+**Status user:**
+
+| Status | Hak akses |
+|---|---|
+| `NEW` | Hanya boleh memasukkan token undangan |
+| `REGISTRATION` | Hanya boleh menyelesaikan registrasi |
+| `ACTIVE` | Seluruh fitur bot (Form Generator, dll.) |
+| `BLOCKED` | Ditolak, tidak boleh memakai fitur apa pun |
+
+**Alur pengguna baru:**
+
+```text
+/start
+  -> Cek Telegram User ID
+  -> Belum terdaftar: minta TOKEN UNDANGAN
+  -> Token valid (langsung diikat ke Telegram User ID, sekali pakai)
+  -> Registrasi: NIK karyawan (8 digit) -> NAMA dikenali otomatis
+     dari Data Karyawan yang diisi admin
+  -> Preview & konfirmasi data
+  -> Status ACTIVE -> menu utama / Form Generator
+```
+
+**Data Karyawan (direktori NIK -> NAMA):** owner mengisi data karyawan lebih
+dulu. Saat registrasi user cukup memasukkan NIK; jika NIK ada di direktori,
+NAMA otomatis terisi. Jika NIK tidak terdaftar, registrasi ditolak dan user
+diminta menghubungi administrator. Nama tidak dapat diisi manual.
+
+**Token undangan:** dibuat acak secara kriptografis (contoh `QMYWI-7K9P-X4M2-AB3C`),
+disimpan **hanya sebagai hash SHA-256** (tanpa plaintext), hanya dapat dipakai
+**satu kali**, dan redeem dilakukan dalam **transaksi** agar tidak dapat
+digunakan dua pengguna secara bersamaan. Token asli hanya ditampilkan sekali
+kepada owner saat dibuat.
+
+**Persistence (SQLite):** data user, NIK, status, invite token, status token,
+riwayat pemakaian token, dan state registrasi tersimpan di `DB_PATH`
+(default `./data/qmywi.sqlite`) sehingga tetap ada setelah restart/redeploy.
+
+**Konfigurasi environment tambahan:**
+
+```env
+# Wajib untuk fitur /admin. Bisa lebih dari satu, pisahkan dengan koma.
+OWNER_TELEGRAM_ID=123456789
+
+# Lokasi database SQLite
+DB_PATH=./data/qmywi.sqlite
+```
+
+**Panel admin (`/admin`, hanya owner):**
+1. Buat token undangan (pilih jumlah + masa berlaku 7 hari / 30 hari / tidak expired)
+2. Daftar token
+3. Daftar pengguna (NIK disamarkan)
+4. Detail pengguna
+5. Blokir pengguna
+6. Aktifkan kembali pengguna
+7. Data Karyawan: tambah massal (tempel `NIK,Nama` banyak baris) / satu-satu, daftar, dan hapus
+
+**Keamanan:** `TELEGRAM_BOT_TOKEN` dan `OWNER_TELEGRAM_ID` selalu dibaca dari
+environment variable (tidak pernah di-hard-code), token bot/secret disensor di
+log, token undangan tidak pernah disimpan dalam bentuk plaintext, serta
+`telegram_user_id`, `nik`, dan `token_hash` memiliki UNIQUE constraint.
+
 ---
 
 ## 5. Menjalankan Pengujian (Testing)
 
-Proyek dilengkapi 27 unit test dan integration test yang mencakup 100% kriteria PRD:
+Proyek dilengkapi unit test dan integration test yang mencakup kriteria PRD serta access control:
 
 ```bash
+# Pemeriksaan sintaks seluruh file sumber (pengganti typecheck)
+npm run typecheck
+
+# Menjalankan seluruh test
 npm test
 ```
 
-Semua pengujian mencakup:
+Cakupan pengujian meliputi:
+- Access control: user baru, token invalid/valid, registrasi, NIK invalid/duplikat, resume registrasi, BLOCKED, blokir/aktifkan
+- Token undangan satu kali pakai & pembuatan token oleh owner
+- Idempotensi `update_id` (termasuk duplicate)
 - Mapping & deteksi material `Z/K/G`
 - Penomoran `HAxx` dan pembatasan `start + count - 1 <= 9`
 - Aturan diameter `FT` dan `FJ`
 - Semua validasi input
 - Format output Mandarin workplace persis sesuai Section 13 PRD
-- Idempotensi `update_id`
 - Perintah `/start`, `/help`, `/material`, `/example`, `/about`, `/cancel`
 - Server Webhook dan health check `GET /health`
 
@@ -139,13 +232,14 @@ Semua pengujian mencakup:
 
 | Perintah | Deskripsi |
 |---|---|
-| `/start` | Menampilkan pesan sambutan QM-YWI dan tombol mulai |
-| `/new` | Memulai form generator baru |
-| `/help` | Panduan lengkap langkah dan aturan |
-| `/material` | Tabel referensi kode material Z, K, G |
-| `/example` | Contoh pengisian dan output teks Mandarin |
-| `/cancel` | Membatalkan sesi pembuatan form aktif |
-| `/about` | Profil Department of Quality Management QM-YWI |
+| `/start` | Sadar-status: minta token (NEW), lanjutkan registrasi (REGISTRATION), atau tampilkan menu utama (ACTIVE) |
+| `/new` | Memulai form generator baru (hanya ACTIVE) |
+| `/help` | Panduan lengkap langkah dan aturan (hanya ACTIVE) |
+| `/material` | Tabel referensi kode material Z, K, G (hanya ACTIVE) |
+| `/example` | Contoh pengisian dan output teks Mandarin (hanya ACTIVE) |
+| `/cancel` | Membatalkan sesi Form Generator aktif (hanya ACTIVE) |
+| `/about` | Profil Department of Quality Management QM-YWI (hanya ACTIVE) |
+| `/admin` | Panel administrator (hanya `OWNER_TELEGRAM_ID`) |
 
 ---
 

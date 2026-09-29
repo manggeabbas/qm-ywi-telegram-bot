@@ -1,11 +1,33 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { bot } from '../src/bot.js';
-import { sessions } from '../src/state.js';
+import os from 'node:os';
+import fs from 'node:fs';
+import path from 'node:path';
 
-test('Bot Commands - /start, /help, /material, /example, /about, /cancel', async () => {
+// Siapkan database sementara SEBELUM modul bot diimpor.
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qmywi-commands-'));
+process.env.DB_PATH = path.join(tmpDir, 'test.sqlite');
+process.env.OWNER_TELEGRAM_ID = '';
+
+const { bot } = await import('../src/bot.js');
+const { sessions } = await import('../src/state.js');
+const { createUser, updateUser } = await import('../src/users.js');
+
+after(() => {
+  try {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  } catch {
+    // abaikan
+  }
+});
+
+test('Bot Commands - /start, /help, /material, /example, /about, /cancel (user ACTIVE)', async () => {
   const userId = 777111;
   const chatId = 777111;
+
+  // User harus ACTIVE agar dapat mengakses command fitur (access control).
+  createUser({ telegramUserId: userId, telegramUsername: 'testuser', status: 'ACTIVE' });
+  updateUser(userId, { name: 'Inspector Test', nik: '12345678' });
 
   const responses = [];
 

@@ -10,6 +10,8 @@ import {
   validateMainDefect,
   validateRemark,
   validateLength,
+  validateName,
+  validateNik,
   VALID_GRADES
 } from '../src/validation.js';
 
@@ -74,4 +76,22 @@ test('Validation - Panjang dalam meter', () => {
   assert.equal(validateLength(0).valid, false);
   assert.equal(validateLength(-10).valid, false);
   assert.equal(validateLength('abc').valid, false);
+});
+
+test('Validation - Registrasi (Nama & NIK karyawan)', () => {
+  // Nama
+  assert.equal(validateName('Budi Santoso').valid, true);
+  assert.equal(validateName('  Budi   Santoso ').value, 'Budi Santoso');
+  assert.equal(validateName('A').valid, false);
+  assert.equal(validateName('').valid, false);
+
+  // NIK = Nomor Induk Karyawan: tepat 8 digit angka tanpa spasi/huruf
+  assert.equal(validateNik('12345678').valid, true);
+  assert.equal(validateNik(' 12345678 ').value, '12345678');
+  assert.equal(validateNik('1234567').valid, false);
+  assert.equal(validateNik('123456789').valid, false);
+  assert.equal(validateNik('1234 678').valid, false);
+  assert.equal(validateNik('1234567A').valid, false);
+  assert.equal(validateNik('3273010101900001').valid, false);
+  assert.equal(validateNik('').valid, false);
 });

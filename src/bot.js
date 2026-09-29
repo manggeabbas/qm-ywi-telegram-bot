@@ -8,6 +8,9 @@ import { Bot, webhookCallback } from 'grammy';
 import { config } from './config.js';
 import { logger } from './logger.js';
 import { sessions, idempotencyCache } from './state.js';
+import { accessGuard } from './access.js';
+import { sendMainMenu } from './menu.js';
+import { handleAdminCommand, adminCallbackMiddleware, adminMessageMiddleware } from './admin.js';
 import {
   STEPS,
   startNewWizard,
@@ -66,30 +69,16 @@ bot.use(async (ctx, next) => {
   await next();
 });
 
+// Middleware Access Control (WAJIB sebelum seluruh command/handler fitur)
+bot.use(accessGuard);
+
 // ======================== COMMANDS ========================
 
 // /start
+// Catatan: untuk user NEW/BLOCKED/REGISTRATION, access guard menangani
+// /start sebelum sampai ke handler ini. Handler ini hanya untuk ACTIVE/owner.
 bot.command('start', async (ctx) => {
-  const userId = ctx.from?.id;
-  const welcomeText = `${config.HEADER_TEXT}
-
-Selamat datang di *QM-YWI Telegram Form Generator* (v${config.VERSION}).
-Bot ini membantu inspector/operator membuat data gulungan baru secara bertahap, cepat, konsisten, dan meminimalkan kesalahan.
-
-Tekan tombol di bawah atau ketik /new untuk mulai membuat form.`;
-
-  await ctx.reply(welcomeText, {
-    parse_mode: 'Markdown',
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: '🚀 Mulai Buat Form', callback_data: 'action:new_form' }],
-        [
-          { text: 'ℹ️ Referensi Material', callback_data: 'cmd:material' },
-          { text: '📖 Bantuan', callback_data: 'cmd:help' }
-        ]
-      ]
-    }
-  });
+  await sendMainMenu(ctx);
 });
 
 // /new
@@ -207,7 +196,15 @@ Bot ini dirancang khusus untuk mempermudah dan memastikan kepatuhan standar pemb
   await ctx.reply(text, { parse_mode: 'Markdown' });
 });
 
+// /admin (hanya owner; non-owner ditolak)
+bot.command('admin', async (ctx) => {
+  await handleAdminCommand(ctx);
+});
+
 // ==================== CALLBACK QUERIES ====================
+
+// Callback admin (owner) — harus terdaftar sebelum handler callback utama.
+bot.on('callback_query:data', adminCallbackMiddleware);
 
 bot.on('callback_query:data', async (ctx) => {
   const data = ctx.callbackQuery.data;
@@ -414,6 +411,9 @@ bot.on('callback_query:data', async (ctx) => {
 
 // ======================= TEXT MESSAGE =======================
 
+// Middleware admin (input jumlah token) — sebelum handler pesan utama.
+bot.on('message:text', adminMessageMiddleware);
+
 bot.on('message:text', async (ctx) => {
   const text = ctx.message.text.trim();
   const userId = ctx.from.id;
@@ -445,8 +445,10 @@ bot.catch((err) => {
 /**
  * Menjalankan bot via Webhook (Production)
  * @param {number} [port]
+ * @param {{ setWebhook?: boolean }} [options]
  */
-export function startWebhookServer(port = config.PORT) {
+export function startWebhookServer(port = config.PORT, options = {}) {
+  const { setWebhook = true } = options;
   const handleUpdate = webhookCallback(bot, 'http', {
     secretToken: config.WEBHOOK_SECRET_TOKEN || undefined
   });
@@ -476,7 +478,7 @@ export function startWebhookServer(port = config.PORT) {
 
   server.listen(port, config.HOST, async () => {
     logger.info(`QM-YWI Telegram Bot Webhook server listening on http://${config.HOST}:${port}`);
-    if (config.WEBHOOK_URL && config.BOT_TOKEN) {
+    if (setWebhook && config.WEBHOOK_URL && config.BOT_TOKEN) {
       try {
         await bot.api.setWebhook(config.WEBHOOK_URL, {
           secret_token: config.WEBHOOK_SECRET_TOKEN || undefined
